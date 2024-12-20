@@ -1,0 +1,376 @@
+---
+title: "one-way ANOVA practice and simulator"
+author: "Carl F. Falk"
+date: "2024-12-19"
+format:
+  html:
+    #embed-resources: true
+    grid: 
+      body-width: 1400px
+filters:
+  - shinylive
+---
+
+<!-- The following resources consulted to get this all working:
+
+At terminal: quarto add quarto-ext/shinylive
+
+Might need to render twice or so, needs to download stuff
+
+https://quarto.thecoatlessprofessor.com/r-shinylive-demo/
+
+https://github.com/coatless-quarto/r-shinylive-demo
+
+To publish is a bit tricky,
+quarto publish quarto-pub (file size too big)
+
+Ultimately went with github pages, but not using quarto publish gh-pages
+1. Create github repo
+2. Make the app the main index file (index.qmd), at least for a first try
+3. Edit _quarto.yml file to render to docs folder
+https://quarto.org/docs/publishing/github-pages.html
+4. Push to github
+5. Edit repo on github
+https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site
+
+For testing before deployment:
+
+https://github.com/RamiKrispin/shinylive-r-->
+
+```{shinylive-r}
+#| standalone: true
+#| viewerHeight: 1200
+
+######################################################################
+## Copyright 2024 Carl F. Falk
+##
+## This program is free software: you can redistribute it and/or
+## modify it under the terms of the GNU General Public License as
+## published by the Free Software Foundation, either version 3 of
+## the License, or (at your option) any later version.
+##
+## This program is distributed in the hope that it will be useful,
+## but WITHOUT ANY WARRANTY; without even the implied warranty of
+## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+## GNU General Public License for more details.
+## <http://www.gnu.org/licenses/>
+
+library(shiny)
+library(xtable)
+library(gtools)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(effectsize)
+#library(report) # auto-generates APA-style report...
+#library(shinyjs) # not used
+#library(ggplot2) # not used
+
+# Define server logic
+server <- function(input, output, session) {
+  
+  # create dataset and descriptives
+  dat <- eventReactive({input$newdat},{
+    
+    # get options
+    J <- input$ngroups
+    opts <- input$genoptions
+    #"Normality"
+    #"Equal variances"
+    #"Ensure equal sample sizes"
+    #"Null hypothesis true"
+    
+    # Sample size
+    # N size hard coded between 2 and 6
+    if("Ensure equal sample sizes" %in% opts){
+      Ng <- rep(input$nsize, J)
+    } else {
+      alph <- rep(1, length(2:6))
+      alph[input$nsize-1] <- 5
+      probs <- as.vector(rdirichlet(1, alph))
+      Ng <- sample(2:6, J, replace=TRUE, prob = probs)
+    }
+
+    # generate population parameters    
+    if ("Normality" %in% opts){
+      if("Null hypothesis true" %in% opts){
+        mu <- rep(rnorm(1, 5, 2),J)
+      } else {
+        mu <- rnorm(J, 5, 2)
+      }
+      
+      if("Equal variances" %in% opts){
+        sd <- rep(abs(rnorm(1, 2, 1.5)), J)
+      } else {
+        sd <- abs(rnorm(J, 2, 1.5))
+      }
+      
+    } else {
+      
+      # flip a coin to do: log-normal or contaminated normal
+      mix <- .5
+      whichdist <- rbinom(1, 1, prob=c(.5,.5))
+      if("Null hypothesis true" %in% opts){
+        if(whichdist == 0 ){
+          # log-normal
+          mu <- rep(rnorm(1, 0, 1),J)
+        } else {
+          # contaminated normal
+          mu <- rep(rnorm(1, 5, 2),J)
+        }
+        
+      } else {
+        if(whichdist == 0){
+          # log-normal
+          mu <- rnorm(J, 0, 1)
+        } else {
+          # contaminated normal
+          mu <- rnorm(J, 5, 2)
+        }
+      }
+      
+      if("Equal variances" %in% opts){
+        if(whichdist == 0){
+          # log-normal
+          sd <- rep(abs(rnorm(1, 1, 1.5)), J)
+        } else {
+          # contaminated normal
+          sd <- rep(abs(rnorm(1, 1, 1.5)), J)
+        }
+      } else {
+        if(whichdist == 0){
+          # log-normal
+          sd <- abs(rnorm(J, 1, 1.5))
+        } else {
+          # contaminated normal
+          sd <- abs(rnorm(J, 1, 1.5))
+        }
+      }
+    }
+    
+    # generate data
+    Y<-vector("numeric")
+    X<-vector("character")
+    for(j in 1:J){
+
+      X<-c(X, rep(paste("Group",j), Ng[j]))      
+      if ("Normality" %in% opts){
+        # normal
+        Y<-c(Y, round(rnorm(Ng[j], mu[j], sd[j]),2))
+      } else {
+        if(whichdist == 0){
+          # log-normal
+          Y<-c(Y, round(rlnorm(Ng[j], mu[j], sd[j]),2))          
+        } else {
+          # contaminated normal? did not check carefully yet...    
+          # mixing proportion hard-coded for now
+          contam <- rnorm(Ng[j], mu[j], 2*sd[j])
+          Y<-c(Y, round(.5*rnorm(Ng[j], mu[j], sd[j]/2)+.5*contam,2))
+        }
+      }
+    }
+    data <- data.frame(X=X,Y=Y)
+    out <- list(data = data
+            )
+    out
+  })
+  
+  # display of raw data
+  output$rawData <- renderDataTable({
+    data <- dat()
+    data$data}
+  )
+  
+  # display of descriptive statistics
+  output$desc <- function(){
+     d <- dat()
+     
+     d$data %>% group_by(X) %>%
+       summarise(N = n(),
+                 mean = mean(Y),
+                 sd = sd(Y),
+                 var = var(Y)) %>%
+       knitr::kable(format="html", digits=3) %>%
+       kableExtra::kable_styling("striped", full_width=T)
+  }
+  
+  # F test
+  output$results <- renderPrint({
+    data <- dat()
+    data <- data$data
+    alpha <- as.numeric(input$alpha)
+    
+    N <- nrow(data)
+    k <- input$ngroups
+    
+    # df
+    dfM <- k-1
+    dfR <- N-k
+    dfT <- N-1
+    
+    # SS
+    Xbar <- round(mean(data$Y), 3)
+    SST <- sum(round((data$Y-Xbar)^2,3)) %>% round(digits=3)
+    SSM <- data %>% group_by(X) %>%
+      summarise(SS = n()*(mean(Y)-Xbar)^2) %>%
+      summarise(sum(SS)) %>% unlist() %>% round(digits=3)
+    SSR <- data %>% group_by(X) %>%
+      summarise(SS = sum((Y-mean(Y))^2)) %>%
+      summarise(sum(SS)) %>% unlist() %>% round(digits=3)
+    
+    # MS
+    MSM <- round(SSM/dfM, digits=3)
+    MSR <- round(SSR/dfR, digits=3)
+    
+    # F
+    Fratio <- round(MSM/MSR, digits=3)
+    Fcrit <- round(qf(alpha, dfM, dfR, lower.tail=FALSE), digits=3)
+    reject <- ifelse(Fratio > Fcrit, TRUE, FALSE)
+
+    # create output
+    out <- ""
+    out <- paste0(out, "alpha: ", input$alpha, "\n")
+    out <- paste0(out, "Grand mean: ", Xbar, "\n")
+    
+    out <- paste0(out, "SSM: ", SSM, "\n")
+    out <- paste0(out, "SSR: ", SSR, "\n")
+    out <- paste0(out, "SST: ", SST, "\n")
+    
+    out <- paste0(out, "dfM: ", dfM, "\n")
+    out <- paste0(out, "dfR: ", dfR, "\n")
+    out <- paste0(out, "dfT: ", dfT, "\n")
+    
+    out <- paste0(out, "MSM: ", MSM, "\n")
+    out <- paste0(out, "MSR: ", MSR, "\n")
+    
+    out <- paste0(out, "F: ", Fratio, "\n")
+    
+    out <- paste0(out, "\n")
+    out <- paste0(out, "Critical F: ", Fcrit, "\n")
+    
+    out <- paste0(out, "\n")
+    out <- paste0(out, "reject H0? ", ifelse(reject, "Yes", "No"), "\n")
+    
+
+    cat(out)
+  })
+
+    # display results of t-test
+#   output$results <- renderPrint({
+#     data <- dat()
+#     alpha <- as.numeric(input$alpha)
+#     
+#     # df and critical t-value
+#     df <- nrow(data$data) - 2
+#     t.crit <- abs(qt(alpha/2, df=df))
+#     
+#     test <- t.test(Y ~ X, data=data$data, var.equal=TRUE, conf.level=1-alpha)
+#     
+#     reject <- test$p.value < alpha
+#     #out <- report(t.test(Y ~ X, data = data$data, var.equal=TRUE))
+#     
+#     D <- unname(test$estimate[1]-test$estimate[2])
+#     pooledvar <- (data$Var1*(data$N1-1)+data$Var2*(data$N2-1))/df
+#     cohend <- D/sqrt(pooledvar)
+#     dsize <- unname(interpret_cohens_d(cohend, rules="cohen1988"))
+#     
+#     out <- ""
+#     out <- paste0(out, "alpha (two-tailed): ", input$alpha, "\n")
+#     out <- paste0(out, "degrees of freedom (df) = ", df,"\n")
+#     out <- paste0(out, "critical t = ", round(t.crit, digits=4), "\n")    
+#     out <- paste0(out, "difference (D; Group 1 - Group 2) = ", round(D, 4), "\n")
+#     out <- paste0(out, "estimated standard error = ", round(test$stderr,4), "\n")    
+#     out <- paste0(out, "obtained t = ", round(test$statistic, digits=4), "\n")
+#     out <- paste0(out, "reject H0? ", ifelse(reject, "Yes", "No"), "\n")
+#     
+#     out <- paste0(out, "\n\n")
+#     out <- paste0(out, "Basic APA-style report\n\n")
+#     
+#     group1diff <- ifelse(D > 0, "higher", "lower")
+#     group1 <- paste0("Group 1 (M = ", round(data$M1,2), ", SD = ", round(data$SD1,2), ")" )
+#     group2 <- paste0("Group 2 (M = ", round(data$M2,2), ", SD = ", round(data$SD2,2), ")" )
+# 
+#     if(reject){
+#       stats <- paste0("t(",df, ") = ", round(test$statistic, 2), ", p < ", alpha,
+#                       ", ", (1-alpha)*100, "% CI[",round(test$conf.int[1],2),",",round(test$conf.int[2],2),"]")      
+#       out <- paste0(out, group1, " had significantly ", group1diff, " scores in
+# comparison to ", group2, ", ", stats, ",
+# with a ", dsize, " effect size, Cohen's d = ", round(cohend,2), ".")
+#     } else {
+#       stats <- paste0("t(",df, ") = ", round(test$statistic, 2), ", p > ", alpha,
+#                       ", ", (1-alpha)*100, "% CI[",round(test$conf.int[1],2),",",round(test$conf.int[2],2),"]")            
+#       out <- paste0(out, "Although ", group1, " tended to have ", group1diff, " scores
+# in comparison to ", group2, ", this difference was
+# not significant, ", stats, ",
+# and had a ", dsize, " effect size, Cohen's d = ", round(cohend,2), ".")
+#     }
+#     cat(out)
+#   })
+#   
+  
+}
+
+ui <- fluidPage(
+
+    # Application title
+    #titlePanel(""),
+
+    # Layout of UI
+    sidebarLayout(
+      
+      sidebarPanel(strong("Data Generation Options"),
+                  numericInput("ngroups",
+                       "Number of groups:",
+                       value = 3,
+                       step = 1,
+                       min = 2,
+                       max = 4),
+                  numericInput("nsize",
+                       "Typical sample size per group",
+                       value = 3,
+                       step = 1,
+                       min = 2,
+                       max = 6),
+                   checkboxGroupInput("genoptions",
+                                      NULL,
+                                      choices = c("Normality",
+                                                  "Equal variances",
+                                                  "Ensure equal sample sizes",
+                                                  "Null hypothesis true"),
+                                      selected= c("Normality",
+                                                  "Equal variances",
+                                                  "Ensure equal sample sizes",
+                                                  "Null hypothesis true")),
+                   actionButton("newdat",
+                        "Generate New Dataset"),
+                   br(),
+                   br(),
+                   strong("Analysis options"),
+                   selectInput("alpha",
+                               label = "alpha (two-tailed):",
+                               choices = c(.05,.005,.01,.02, .1, .2, .3, .4, .5)
+                   )
+                   
+      ),
+      # Main Panel
+      mainPanel(
+          tabsetPanel(
+            tabPanel("Raw Data",
+                     dataTableOutput("rawData")),
+             tabPanel("Descriptive Stats",
+                      tableOutput("desc")),
+            # ),
+             tabPanel("Results",
+                      verbatimTextOutput("results")                     
+             )#,
+            #tabPanel("Visualization"
+            #)
+          )
+      )
+    ) # end sidebarLayout
+)
+
+shinyApp(ui = ui, server = server)
+
+
+```
